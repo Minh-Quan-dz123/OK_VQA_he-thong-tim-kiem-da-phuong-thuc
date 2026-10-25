@@ -1,0 +1,352 @@
+@startuml
+title Kiến trúc hệ thống Knowledge-Based Multimodal Retrieval for OK-VQA
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+' =========================================================
+' OFFLINE INDEXING
+' =========================================================
+
+package "Giai đoạn 0 - Offline Indexing" {
+
+    component "Wikipedia / NQv2 / OK-VQA\nPassages" as PASSAGES
+
+    component "BM25 Indexer\nPyserini / Lucene" as BM25_INDEXER
+    database "Inverted Index\nSparse DB" as SPARSE_DB
+
+    component "Text Embedding Model\nBGE-M3 / E5-large-v2" as EMBEDDER
+
+    component "Vector Index\nFAISS / Qdrant / Milvus" as VECTOR_INDEX
+    database "Vector Database\nDense DB" as DENSE_DB
+
+    PASSAGES --> BM25_INDEXER : passages P1...PN
+    BM25_INDEXER --> SPARSE_DB : build inverted index
+
+    PASSAGES --> EMBEDDER : P_i
+    EMBEDDER --> VECTOR_INDEX : V_p_i
+    VECTOR_INDEX --> DENSE_DB : store vectors
+
+    note right of EMBEDDER
+        Đây là MODEL.
+
+        Input:
+        text passage P_i
+
+        Output:
+        V_p_i
+
+        Dimension = 1024
+
+        Có thể chạy local.
+        Không phải API bắt buộc.
+    end note
+
+    note right of BM25_INDEXER
+        Đây là LIBRARY / MODULE.
+
+        Pyserini / Lucene
+        thực hiện BM25 indexing.
+
+        Không phải LLM.
+        Không phải API.
+    end note
+}
+
+
+' =========================================================
+' INPUT
+' =========================================================
+
+package "Online Query" {
+
+    component "OK-VQA\nImage + Question" as OKVQA
+}
+
+
+' =========================================================
+' HYDE
+' =========================================================
+
+package "Giai đoạn 1 - Multimodal HyDE" {
+
+    component "VLM\nLLaVA-1.5-7B\nhoặc Qwen-VL-Chat" as HYDE_VLM
+
+    component "Text Encoder\nBGE-M3 / E5-large-v2" as QUERY_ENCODER
+
+    artifact "P_hypo\nHypothetical Document" as PHYPO
+    artifact "V_query\nQuery Vector" as VQUERY
+
+    OKVQA --> HYDE_VLM : Image I + Question Q
+
+    HYDE_VLM --> PHYPO : sinh text
+
+    PHYPO --> QUERY_ENCODER : P_hypo
+
+    QUERY_ENCODER --> VQUERY : embedding
+
+    note right of HYDE_VLM
+        Đây là VLM MODEL.
+
+        Input:
+        Image + Question
+
+        Output:
+        P_hypo
+
+        Nếu chạy local:
+        model weights + inference library.
+
+        Không bắt buộc API.
+    end note
+
+    note right of QUERY_ENCODER
+        Đây là MODEL.
+
+        Input:
+        P_hypo
+
+        Output:
+        V_query
+
+        Dimension = 1024.
+    end note
+}
+
+
+' =========================================================
+' HYBRID RETRIEVAL
+' =========================================================
+
+package "Giai đoạn 2 - Hybrid Search" {
+
+    component "BM25 Search\nPyserini / Lucene" as BM25_SEARCH
+
+    component "Dense Vector Search\nFAISS / Qdrant / Milvus" as DENSE_SEARCH
+
+    component "RRF Fusion\nFunction" as RRF
+
+    component "Cross Encoder Reranker\nBGE-Reranker-large\nhoặc mMARCO" as RERANKER
+
+    artifact "L_sparse\nTop-K1" as LSPARSE
+    artifact "L_dense\nTop-K1" as LDENSE
+    artifact "L_fused\nTop-20" as LFUSED
+    artifact "P_topK\nTop-5" as PTOPK
+
+    PHYPO --> BM25_SEARCH : P_hypo
+    SPARSE_DB --> BM25_SEARCH : inverted index
+
+    BM25_SEARCH --> LSPARSE : documents + r_sparse(d)
+
+    VQUERY --> DENSE_SEARCH : V_query
+    DENSE_DB --> DENSE_SEARCH : vector index
+
+    DENSE_SEARCH --> LDENSE : documents + r_dense(d)
+
+    LSPARSE --> RRF
+    LDENSE --> RRF
+
+    RRF --> LFUSED : Top-20
+
+    LFUSED --> RERANKER : P_i
+    PHYPO --> RERANKER : P_hypo
+
+    RERANKER --> PTOPK : Top-K2 = 5
+
+    note right of RRF
+        Đây KHÔNG phải model.
+
+        Đây chỉ là FUNCTION.
+
+        S_RRF(d) =
+        1 / (r_sparse(d) + c)
+        +
+        1 / (r_dense(d) + c)
+
+        c = 60
+
+        Thực hiện bằng code.
+        Không cần API.
+    end note
+
+    note right of BM25_SEARCH
+        Đây là SEARCH MODULE.
+
+        Input:
+        P_hypo
+
+        DB:
+        Sparse DB
+
+        Output:
+        Top-K1
+        + rank.
+    end note
+
+    note right of DENSE_SEARCH
+        Đây là VECTOR SEARCH MODULE.
+
+        Input:
+        V_query
+
+        DB:
+        Dense DB
+
+        Similarity:
+        Cosine Similarity
+
+        Output:
+        Top-K1
+        + rank.
+    end note
+
+    note right of RERANKER
+        Đây là MODEL.
+
+        Cross Encoder nhận:
+
+        (P_hypo, P_i)
+
+        Output:
+        Score_rerank
+
+        Có thể chạy local.
+        Không bắt buộc API.
+    end note
+}
+
+
+' =========================================================
+' VQA
+' =========================================================
+
+package "Giai đoạn 3 - VQA Inference" {
+
+    component "Prompt Constructor\nFunction" as PROMPT
+
+    artifact "Text Input\nQuestion + Context" as TEXT_INPUT
+
+    component "VQA Vision-Language Model\nLLaVA-1.5-13B\nQwen-VL-Chat\nhoặc InstructBLIP" as VQA_MODEL
+
+    artifact "A_pred\nPredicted Answer" as APRED
+
+    OKVQA --> PROMPT : Image I + Question Q
+    PTOPK --> PROMPT : P_topK
+
+    PROMPT --> TEXT_INPUT : create prompt
+
+    TEXT_INPUT --> VQA_MODEL : text input
+    OKVQA --> VQA_MODEL : Image I
+
+    VQA_MODEL --> APRED : answer
+
+    note right of PROMPT
+        Đây chỉ là FUNCTION.
+
+        Không phải AI model.
+
+        Nhiệm vụ:
+        ghép Question +
+        Top-K passages +
+        instruction.
+    end note
+
+    note right of VQA_MODEL
+        Đây là VLM MODEL.
+
+        Input:
+        Image I
+        + Text Input
+
+        Output:
+        A_pred
+
+        Có thể chạy local.
+    end note
+}
+
+
+' =========================================================
+' EVALUATION
+' =========================================================
+
+package "Giai đoạn 4 - Evaluation" {
+
+    component "VQA Accuracy\nFunction" as VQA_ACC
+
+    component "Recall@K / MRR\nFunction" as IR_METRIC
+
+    artifact "Ground Truth\nA_gt" as AGT
+
+    artifact "Evaluation Results" as RESULTS
+
+    APRED --> VQA_ACC
+    AGT --> VQA_ACC
+
+    PTOPK --> IR_METRIC
+    AGT --> IR_METRIC
+
+    VQA_ACC --> RESULTS
+    IR_METRIC --> RESULTS
+
+    note right of VQA_ACC
+        Đây là FUNCTION.
+
+        Không phải model.
+
+        So sánh:
+        A_pred với A_gt.
+
+        Output:
+        VQA Accuracy.
+    end note
+
+    note right of IR_METRIC
+        Đây là FUNCTION.
+
+        Không phải model.
+
+        Đánh giá retrieval.
+
+        Output:
+        Recall@K
+        và MRR.
+    end note
+}
+
+
+' =========================================================
+' LEGEND
+' =========================================================
+
+legend right
+
+    == Phân loại thành phần ==
+
+    MODEL
+    VLM / Text Encoder / Reranker
+    -> model weights
+    -> inference bằng code
+    -> có thể chạy local
+
+    LIBRARY / MODULE
+    Pyserini / Lucene / FAISS / Qdrant
+    -> cung cấp chức năng tìm kiếm / lưu trữ
+    -> gọi bằng function hoặc API của thư viện
+
+    FUNCTION
+    RRF / Cosine Similarity
+    Prompt Constructor
+    Evaluation Metrics
+    -> chỉ là hàm / thuật toán
+    -> không phải model
+    -> không cần API
+
+    DATABASE / INDEX
+    Sparse DB / Dense DB
+    -> lưu dữ liệu
+    -> được module truy vấn
+
+endlegend
+
+@enduml
