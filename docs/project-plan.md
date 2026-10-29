@@ -4,7 +4,7 @@
 
 ### Giao đoạn 0: Lập chỉ mục Offline cho cơ sở tri thức wikipedia
 **Mục tiêu:** chuẩn bị CSDL để hỗ trợ Tìm Kiếm Lai (Hydrid Search) kết hợp cả so khớp từ khóa (Sparse) và ngữ nghĩa (Dense)  
-**Input:** Tập hợp N đoạn văn Wikipedia (P1, P2,...P_N) trích xuất từ bộ dữ liệu NaturalQuestionsV2 và cả các câu văn của OK-VQA nữa. Mỗi đoạn văn chunking 100-200 từ   
+**Input:** Tập hợp N đoạn văn Wikipedia (P1, P2, ..., P_N) thuộc miền Plants and Animals. Có thể bổ sung tài liệu Wikipedia phù hợp từ NaturalQuestionsV2 khi cần. Chunking mục tiêu khoảng 200 từ/chunk, overlap 40 từ. **Ảnh, câu hỏi và đáp án của OK-VQA chỉ phục vụ đánh giá; không đưa câu hỏi/đáp án OK-VQA vào corpus truy xuất.**  
 Xử lý:   
 - B1.1. đưa N đoạn văn vào bộ lập chỉ mục BM25 (như Pyserini / Lucene) để xây dựng chỉ mục đảo (Inverted Index) (thêm so với Base)
 - B1.2. (song song) Dense indexing: đưa từng đoan văn P_i qua Text Embedding Model như BGE - M3 hoặc E5 - Large - v2 (kiến trúc Bi-encoder) để tạo vector ngữ nghĩa dày đặc Vp_i Rd (d=1024).  => sau đó khi toàn bộ Vp_i vào Vector Database (FAISS / Qdrant / Milvus) và xây dựng chỉ mục HNSW/IVF để tìm kiếm nhanh
@@ -77,6 +77,8 @@ VQAAccuracy(Apred)=1,SốđápántrongAgtkhớpvớiApred3
 - Nguyên tắc phối hợp: Tất cả dịch vụ thống nhất cấu trúc dữ liệu và API trước khi viết logic. Phần VLM có thể thay bằng mock để những người không có GPU vẫn làm việc được.
 
 # KẾ HOẠCH TRIỂN KHAI HỆ THỐNG MULTIMODAL HYBRID RETRIEVAL
+
+> **Trạng thái tài liệu:** Bản kế hoạch và dự thảo hợp đồng tích hợp kỹ thuật. Những mục được ghi **“Đề xuất — chờ nhóm xác nhận”** chưa phải là quyết định chung. Xem **Mục VI** để chốt Bước 00 của phần Data Indexing. Giữ nguyên những nội dung đã quy định trong dự án; không suy diễn rằng các công cụ đã cài đặt hoặc các module đã hoàn thành.
 ## I. Tổng quan
 ### 1. Mục tiêu
 Xây dựng hệ thống Knowledge-Based Visual Question Answering (KB-VQA), sử dụng Multimodal HyDE kết hợp Hybrid Search (BM25 + Dense Retrieval), RRF và Reranking để tìm kiếm tri thức Wikipedia, sau đó dùng VLM sinh câu trả lời.  
@@ -285,7 +287,8 @@ chunk_index
 ```
 
 Các trường bổ sung do người phụ trách quyết định.  
-Một chunk_id phải ánh xạ nhất quán giữa PostgreSQL, Lucene và Qdrant để Retrieval Service có thể lấy đúng nội dung đoạn văn.  
+Một `chunk_id` phải ánh xạ nhất quán giữa PostgreSQL, Lucene và Qdrant để Retrieval Service lấy đúng nội dung đoạn văn. Quy ước chi tiết về ID, cách lưu ở từng hệ thống và cấu hình kết nối xem **Mục VI**.  
+> **Lưu ý kỹ thuật:** Qdrant chỉ chấp nhận point ID ở dạng số nguyên không âm hoặc UUID; vì vậy không mặc định dùng trực tiếp chuỗi `chunk_id` làm point ID. Có thể lưu `chunk_id` trong payload và dùng UUID xác định cho point ID (đang đề xuất, chờ thống nhất).  
 #### 4. Hạ tầng
 - PostgreSQL: Lưu nội dung và metadata.
 - Lucene: Lưu Sparse Index trên ổ đĩa.
@@ -365,7 +368,7 @@ Vector minh họa đã rút gọn. Số chiều thực tế phụ thuộc model 
 - API nhận ảnh và câu hỏi.
 - Sinh P_hypo và V_query.
 - README hướng dẫn cài đặt, chạy và test API.
-Lưu ý: Text Encoder phải tương thích với model đã sử dụng để lập Dense Index tại Thành phần 1.  
+Lưu ý: Text Encoder phải tương thích với model đã sử dụng để lập Dense Index tại Thành phần 1. Cần chốt cùng checkpoint/revision, thư viện suy luận, cách encode và các cấu hình ảnh hưởng trực tiếp đến vector; xem **Mục VI.2**.  
 
 ### Thành phần 3 — Retrieval Service
 **Người phụ trách:** _____ ______  
@@ -447,7 +450,7 @@ POST /api/v1/retrieve
 Ví dụ response đã rút gọn, số đoạn thực tế tối đa bằng K2.  
 #### 4. Kết quả bàn giao
 - Server Retrieval hoạt động độc lập.
-- Kết nối được PostgreSQL, Lucene và Qdrant.
+- Kết nối được PostgreSQL, Lucene và Qdrant theo hợp đồng truy cập ở **Mục VI.5**.
 - Thực hiện BM25, Dense Search, RRF và Reranking.
 - API trả danh sách passages theo format thống nhất.
 - README hướng dẫn cấu hình, chạy và kiểm thử.
@@ -648,4 +651,118 @@ Mỗi thành viên phát triển trên branch riêng, sau đó merge vào dev.
 - Ví dụ input/output.
 - Hướng dẫn test.
 - Thông tin cấu hình model hoặc database.
-Người khác phải có thể làm theo tài liệu để chạy được thành phần đó trên máy cá nhân hoặc cloud.  
+Người khác phải có thể làm theo tài liệu để chạy được thành phần đó trên máy cá nhân hoặc cloud.
+## VI. Hợp đồng kỹ thuật Data Indexing ↔ HyDE ↔ Retrieval (BƯỚC 00)
+
+**Mục đích:** Làm rõ những thông số cần thống nhất **trước khi xây dựng Dense Index, Sparse Index và tích hợp server**. Phần này là **dự thảo để nhóm xem xét**, không tự động thay thế thỏa thuận của nhóm. Người phụ trách Data Indexing phối hợp với thành viên HyDE và Retrieval để cập nhật kết quả chốt vào `docs/architecture.md` và `docs/api.md`.
+
+### VI.1. Quy định đã có trong kế hoạch
+
+| Hạng mục | Quy định hiện có | Trạng thái |
+|---|---|---|
+| Ngôn ngữ / phạm vi | Wikipedia tiếng Anh, Plants and Animals | Đã nêu trong kế hoạch |
+| Dữ liệu đánh giá | OK-VQA, lọc Plants and Animals | Đã nêu trong kế hoạch |
+| Dữ liệu không được đưa vào corpus truy xuất | Câu hỏi và đáp án OK-VQA | Đã nêu trong kế hoạch |
+| Phân đoạn | Mục tiêu ~200 từ/chunk, overlap 40 từ | Đã nêu trong kế hoạch |
+| Dữ liệu gốc/metadata | PostgreSQL (`documents`, `chunks`) | Đã nêu trong kế hoạch |
+| Sparse Retrieval | BM25 bằng Pyserini/Lucene | Đã nêu trong kế hoạch |
+| Dense Retrieval | Qdrant | Đã nêu trong kế hoạch |
+| Text Encoder | Ưu tiên BGE-M3 (1.024 chiều); có thể cân nhắc E5 | **Chưa chốt chính thức** |
+| Phương pháp so sánh vector | Cosine được mô tả ở giai đoạn Retrieval | Đã nêu về thuật toán; **chưa chốt cấu hình Collection** |
+
+### VI.2. Thống nhất Text Encoder giữa Data Indexing và HyDE
+
+**Đề xuất — chờ nhóm xác nhận:**
+
+| Thông số | Giá trị đề xuất / nội dung cần thống nhất |
+|---|---|
+| Model | `BAAI/bge-m3` |
+| Output dùng để Dense Retrieval | Dense embedding (không dùng nhầm sparse vector hoặc multi-vector đầu ra khác) |
+| Số chiều | `1024` nếu sử dụng BGE-M3 với cấu hình mặc định |
+| Checkpoint | Ghi **revision/commit hash cụ thể** sau khi tải model; hiện **chưa chọn** |
+| Thư viện tạo embedding | Chọn một cách encode nhất quán (ví dụ `FlagEmbedding` hoặc cách tích hợp đã kiểm chứng); **chưa chọn phiên bản** |
+| Chuẩn bị văn bản | Ghi quy tắc làm sạch đầu vào, có/không thêm prefix, giới hạn độ dài/truncation |
+| Chuẩn hóa / kiểu vector | Ghi rõ có normalize hay không, float32 hay kiểu khác; kiểm tra sự tương thích với metric Qdrant |
+| Kiểm thử | Hai bên encode cùng một chuỗi thử và so sánh kích thước, độ chênh vector theo ngưỡng đã thống nhất |
+
+**Nguyên tắc bắt buộc:** Embeddings của Wikipedia (Data Indexing) và embeddings của `P_hypo` (HyDE) phải được tạo trong cùng không gian vector. Chỉ ghi tên “BGE-M3” là **chưa đủ** nếu khác checkpoint, quy trình encode hoặc cấu hình gây thay đổi biểu diễn. Cách triển khai có thể khác máy nhưng phải được kiểm thử tương thích.
+
+**Người xác nhận:** Data Indexing: ______ · HyDE: ______ · Ngày: ______
+
+### VI.3. Quy ước `document_id`, `chunk_id` và đồng bộ ba hệ thống
+
+**Schema tối thiểu đã có trong dự án:**
+
+```text
+documents(document_id, title, source, url, domain)
+chunks(chunk_id, document_id, text, chunk_index)
+```
+
+**Đề xuất — chờ nhóm xác nhận:**
+
+- `document_id`: chuỗi ổn định dựa trên ID trang Wikipedia tiếng Anh, ví dụ `wiki_en_12345`. Nếu dùng nguồn khác, phải quy định namespace riêng để không trùng ID.
+- `chunk_index`: số nguyên bắt đầu từ `0` trong từng tài liệu.
+- `chunk_id`: chuỗi duy nhất dạng `<document_id>_chunk_<chunk_index>`, ví dụ `wiki_en_12345_chunk_0000` (phần chỉ số đệm 4 chữ số). Khi thay đổi bản corpus hoặc thuật toán chunking, phải xác định cách version/rebuild để không khiến cùng ID trỏ sang nội dung khác.
+- PostgreSQL: `documents.document_id` là khóa chính; `chunks.chunk_id` là khóa chính; `chunks.document_id` tham chiếu đến `documents.document_id`. Đề xuất thêm ràng buộc duy nhất cho cặp `(document_id, chunk_index)` trong từng phiên bản corpus.
+- Lucene: sử dụng giá trị `chunk_id` làm định danh document trong chỉ mục để kết quả BM25 ánh xạ được về PostgreSQL.
+- Qdrant: lưu `chunk_id` và `document_id` trong payload; dùng UUID ổn định (ví dụ UUIDv5 từ `chunk_id`) làm Qdrant point ID nếu cần. **Không dùng chuỗi `chunk_id` tùy ý làm point ID trực tiếp**.
+- PostgreSQL lưu nội dung văn bản chuẩn; Lucene và Qdrant chứa dữ liệu đủ dùng để truy xuất và ánh xạ, không tự tạo định danh không thể đối chiếu.
+
+**Kiểm thử bắt buộc:** Với một `chunk_id` mẫu, kiểm tra bản ghi PostgreSQL, kết quả BM25 và point Qdrant đều quy về **đúng cùng một đoạn văn**. Khi rebuild phải kiểm tra số lượng, tính duy nhất và phát hiện ID bị trỏ sang nội dung khác.
+
+**Người xác nhận:** Data Indexing: ______ · Retrieval: ______ · Ngày: ______
+
+### VI.4. Cấu hình Qdrant Collection
+
+**Đề xuất — chờ nhóm xác nhận:**
+
+| Thông số | Giá trị đề xuất |
+|---|---|
+| Collection | `wikipedia_chunks_v1` |
+| Vector size | `1024` **nếu đã chốt BGE-M3** |
+| Distance | `Cosine` |
+| Point ID | UUID ổn định tạo từ `chunk_id`, hoặc quy tắc ID khác sau khi nhóm thống nhất |
+| Payload bắt buộc | `chunk_id`, `document_id` |
+| Payload bổ sung hữu ích | `domain`, `title`, `source` nếu Retrieval cần lọc/hiển thị nhanh |
+| Nguồn nội dung chuẩn | PostgreSQL, truy vấn theo `chunk_id` |
+
+**Điều kiện hoàn thành:** Collection được tạo đúng vector size/metric, có thể insert và tìm kiếm vector thử; Retrieval Service lấy đúng passage từ PostgreSQL qua `chunk_id`. Nếu đổi model hoặc kích thước vector thì tạo Collection phiên bản mới hoặc xây dựng lại chỉ mục, không ghép lẫn hai không gian vector.
+
+**Người xác nhận:** Data Indexing: ______ · Retrieval: ______ · Ngày: ______
+
+### VI.5. Cách Retrieval Service truy cập PostgreSQL, Lucene và Qdrant
+
+**Hiện trạng:** Kế hoạch nêu Retrieval Service kết nối cả ba hệ thống, nhưng **chưa chốt cách triển khai chia sẻ giữa các máy**.
+
+**Đề xuất — chờ nhóm xác nhận:**
+
+| Tài nguyên | Cách Retrieval Service truy cập | Biến/cấu hình dự kiến |
+|---|---|---|
+| PostgreSQL | Kết nối theo URL và tài khoản được cấp; không hard-code mật khẩu | `DATABASE_URL` |
+| Qdrant | Kết nối qua HTTP(S) endpoint; API key nếu môi trường yêu cầu | `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION` |
+| Lucene | Index là **thư mục trên đĩa**, không phải HTTP API mặc định. Cần bàn giao/copy index hoặc mount cùng volume cho Retrieval Service | `LUCENE_INDEX_PATH` |
+| Bộ mã hóa | Đọc cấu hình model đã chốt để kiểm tra tương thích truy vấn | `EMBEDDING_MODEL_ID`, `EMBEDDING_MODEL_REVISION` (tên biến đề xuất) |
+
+Cần thống nhất các trường hợp triển khai:
+
+1. **Chạy cùng máy / cùng Docker Compose:** PostgreSQL và Qdrant là các service hoặc container; Lucene Index được mount vào Retrieval Service bằng volume phù hợp.
+2. **Chạy trên các máy khác nhau:** PostgreSQL và Qdrant cần host/port hoặc endpoint có thể truy cập và được bảo vệ; Lucene Index phải được phân phối như một artifact có phiên bản và checksum, hoặc đặt trên storage được mount tương thích.
+3. **Bí mật kết nối:** Đặt giá trị thực trong `.env` cục bộ hoặc kho secrets; chỉ đưa **tên biến và giá trị mẫu không nhạy cảm** vào `.env.example`. Không commit mật khẩu, token, dữ liệu lớn hoặc index khổng lồ lên Git.
+
+**Thông tin phải bàn giao cho Retrieval Service:** tên Collection, model/revision và vector size, metric, quy ước ID, schema, đường dẫn hoặc artifact của Lucene Index, ví dụ `chunk_id` và câu truy vấn để test ba nguồn. Mọi thay đổi phải thông báo nhóm và cập nhật `docs/architecture.md` / `docs/api.md` khi ảnh hưởng hợp đồng tích hợp.
+
+**Người xác nhận:** Data Indexing: ______ · Retrieval: ______ · Người phụ trách hạ tầng: ______ · Ngày: ______
+
+### VI.6. Checklist ký xác nhận — điều kiện đóng BƯỚC 00
+
+- [x] Ghi rõ phạm vi tiếng Anh, Plants and Animals và nguồn corpus/đánh giá theo kế hoạch hiện tại.
+- [x] Ghi schema tối thiểu của `documents` và `chunks`.
+- [x] Ghi cấu hình dự thảo và các vấn đề còn thiếu cần nhóm thảo luận.
+- [ ] Data Indexing và HyDE chốt encoder, checkpoint/revision, cách tạo vector và test tương thích.
+- [ ] Data Indexing và Retrieval chốt quy tắc ID, ánh xạ sang Lucene và Qdrant.
+- [ ] Data Indexing và Retrieval chốt Qdrant Collection, vector size, metric và payload.
+- [ ] Data Indexing và Retrieval chốt phương thức truy cập ba hệ thống, bao gồm bàn giao Lucene Index.
+- [ ] Chuyển các quyết định **đã được nhóm xác nhận** vào `docs/architecture.md` và phần API liên quan vào `docs/api.md`.
+- [ ] Ghi nhận ngày, người xác nhận và chuyển các mục “Đề xuất — chờ nhóm xác nhận” thành “Đã chốt”.
+
+> **Kết luận trạng thái:** Đã **hoàn thành việc soạn dự thảo BƯỚC 00**, nhưng **chưa xác nhận BƯỚC 00 hoàn tất** cho đến khi các mục chưa đánh dấu ở trên được nhóm chốt. Trong khi chờ, có thể chuẩn bị cấu trúc dự án/môi trường và dữ liệu mẫu; chưa nên xây dựng Dense Index chính thức với thông số còn thay đổi.
